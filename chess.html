@@ -1,0 +1,389 @@
+<html>
+<head>
+	<meta charset='utf-8'>
+	<title>chess.com tourney gen</title>
+	<script src='jquery-3.4.0.min.js'></script>
+	<style>
+	body {
+		color: #ccc;
+		background-color: #425;
+		display: block;
+		margin-left: 20%;
+		margin-right: auto;
+	}
+	#script-error {
+		background-color: #933;
+	}
+	#script-notice {
+		background-color: #373;
+	}
+	.script-messages>div {
+		padding: 2em;
+		display: none;
+	}
+	#teams>thead {
+		background-color: #203;
+	}
+	#teams>tbody {
+		background-color: #315;
+	}
+	#teams>tbody>tr:nth-child(2n) {
+		background-color: #304;
+	}
+	#teams>tbody td {
+		padding-left: 1em;
+		padding-right: 1em;
+	}
+	#teams>tbody td:nth-child(1) {
+		text-align: right;
+	}
+
+	#teams>tbody>tr.resultWon td:nth-child(1) {
+		background-color: #373;
+	}
+	#teams>tbody>tr.resultWon td:nth-child(2) {
+		background-color: #733;
+	}
+	#teams>tbody>tr.resultLost td:nth-child(2) {
+		background-color: #373;
+	}
+	#teams>tbody>tr.resultLost td:nth-child(1) {
+		background-color: #733;
+	}
+	#teams>tbody>tr.resultDraw td {
+		background-color: #337;
+	}
+	</style>
+</head>
+<body>
+
+<h3>chess.com Tournament <span id='tourney-date'></span></h3>
+<h6>v 0.1</h6>
+
+<form action='' method='GET' onsubmit='return false;'>
+<div id='form-content'>
+Game Type: <select id='game-type'>
+	<option value='chess_daily'>"daily"</option>
+	<option value='chess_rapid' selected>rapid</option>
+	<option value='chess_bullet'>bullet</option>
+	<option value='chess_blitz'>blitz</option>
+</select> <input name='gameNote' value=''>
+<table id='teams'>
+	<thead>
+		<tr><th>team A <br>"<input name='teamA' value=''>"</th>
+		<th>team B <br>"<input name='teamB' value=''>"</th>
+		<th>notes</th>
+		<th>result A vs B</th></tr>
+	</thead>
+	<tbody>
+	</tbody>
+</table>
+
+<div>
+	<!-- <input type='submit' onclick='return false;' value='save'> -->
+</div>
+
+</div>
+</form>
+
+<input id='add-player' type='text'><button onclick='return addPlayer();'>Add Player</button>
+<div id='playing-list'></div>
+<div><input type='button' onclick='return makePlayerTable();' value='Update Table'></div>
+
+<div class='script-messages'>
+	<div id='script-error'> </div>
+	<div id='script-notice'> </div>
+</div>
+
+
+<!-- Tournament setup utility
+	<small>Getting players via https://www.chess.com/news/view/published-data-api</small>
+	By ezlisten api.chess.com/pub/player/ezlisten & twitch.tv/ezlisten github.com/ez-listen
+	<pre>
+	TODO: 
+		- board-climbing tournament type (winner keeps playing next player till loss)
+		- persist players/games in localStorage
+		- save games to back-end DB
+		- check for user online status {user}/is-online
+		- parse querystring params to rebuild game table
+		- show player avatars and country flags?
+		- custom styling from querystring, localStorage, or DB
+		- handle 301/304 ? responses ?
+	</pre>
+-->
+
+<script>
+'use strict';
+
+// add one dummy blank player, in case of odd-number player, or team preferences
+var players = {'#playing#':[], '':{'#name':''}};
+var nameInput = $('#add-player');
+var namefilter = /[^a-z0-9_-]/i;
+var gametypes = [];
+var gametype = false;
+var timer = false;
+const DEFAULT_TEAM_ANY = 3;
+
+window.onload = function(){
+	if(typeof JSON == "undefined" || typeof window.localStorage == "undefined"){
+		error('Download a modern Web Browser '+
+		'<a href="https://www.mozilla.org/en-US/firefox/download/thanks/?n=f">firefox</a>'
+		, false);
+		alert('Your browser is too old!');
+		window.stop();
+	}
+	if(typeof $ == "undefined"){
+		console.log('Error: Missing jQuery https://jquery.com/download/');
+		alert('Error: jQuery is required');
+		window.stop();
+	}
+
+	for(let i=0, gtsel=$('#game-type option'); i<gtsel.length; ++i){
+		gametypes[i] = gtsel[i].value;
+		players[''][gametypes[i]] = {'rating':''};
+	}
+
+	$('#game-type').change(function(ev){
+		gametype = this.value;
+		refreshPlayingList();
+	}).change();
+
+	$('#teams').on('change','.wld input[type="radio"]',function(ev,clear){
+		let target = $(this).parents('tr');
+		target.removeClass('resultWon resultLost resultDraw');
+
+		if( !clear ){
+			switch(this.value){
+				case 'w': target.addClass('resultWon');
+				break;
+				case 'l': target.addClass('resultLost');
+				break;
+				case 'd': target.addClass('resultDraw');
+				break;
+			}
+		}
+	});
+
+	// set the team preference, 0(not playing), 1=team A, 2=team B, 3=any (DEFAULT_TEAM_ANY)
+	$('#playing-list').on('change', 'select[name="teampref"]', function(ev){
+		let n = /p:(.+)/.exec(this.parentNode.id);
+		if( !n ){
+			error('Something went wrong, can\'t find id(name)', false);
+			console.log(this.parentNode);
+			return false;
+		}
+		let teampref = DEFAULT_TEAM_ANY;
+		switch(this.value){
+			case '~':;
+			break;
+			default: teampref = (''+this.value).charCodeAt()-64;
+			break;
+		}
+		players['#playing#'][n[1]] = teampref;
+	});
+}
+
+
+
+
+
+/*************************************************************
+* functions
+*************************************************************/
+
+function addPlayer()
+{
+	let name = nameInput.val();
+	if( !name || name.length < 3 ) return false;
+	if( namefilter.test(name) ){
+		alert('invalid username');
+		return false;
+	}
+
+	if(players['#playing#'][name]){
+		players['#playing#'][name] = DEFAULT_TEAM_ANY;
+		return false;
+	}
+
+	if(players[name]){
+		console.log('cached player '+name);
+		onboardPlayer(players[name]);
+	}
+	else{
+		getPlayerStats(name, function(n,d){
+			let gamestotal = 0;
+			players[n] = {"#name":n};
+			for(let i=0; i<gametypes.length; ++i){
+				let g = gametypes[i];
+				if( !d[g] ){
+					console.log(n+' has not played any '+g);
+					continue;
+				}
+				let cg = Number(d[g].record.win)+Number(d[g].record.loss)+Number(d[g].record.draw);
+				gamestotal += cg;
+				players[n][g] = {
+					"rating": Number(d[g].last.rating),
+					"played": cg
+				};
+			}
+			players[n]["games"] = gamestotal;
+			console.log(n+' has played '+gamestotal+' matches');
+			onboardPlayer(players[n]);
+		});
+	}
+	return false;
+}
+
+function onboardPlayer(player)
+{
+	players['#playing#'][player['#name']] = DEFAULT_TEAM_ANY;
+	insertPlayerList(player);
+}
+
+function insertPlayerList(player)
+{
+	if($('#playing-list>#p\\:'+player['#name']).length) return;
+	$('#playing-list').append('<div id="p:'+ player['#name'] +
+		'"> <select name="teampref" title="team preference">'+
+		'<option>~</option><option>A</option><option>B</option></select>'+
+		' <b>'+ player['#name'] +'</b> '+
+		player[gametype]['rating']+' ('+player[gametype]['played']+' games / '+player['games']+
+		' total) <button onclick="deboardPlayer(\''+ player['#name'] +'\');" title="remove"> X </button></div>'
+	);
+}
+
+function refreshPlayingList()
+{
+	$('#playing-list').html('');
+	for(let i in players['#playing#']){
+		if(players['#playing#'][i] == 0) continue;
+		insertPlayerList(players[i]);
+	}
+}
+
+function deboardPlayer(name)
+{
+	$('#playing-list>#p\\:'+name).remove();
+	players['#playing#'][name] = 0;
+	return false;
+}
+
+function getPlayerStats(name, callfunc)
+{
+	$.get('https://api.chess.com/pub/player/'+encodeURIComponent(name)+'/stats', function(d){
+		callfunc(name, d);
+	},'json')
+	.fail(function(xhr){
+		let msg = xhr.status+' ';
+		switch(xhr.status){
+			case 404: msg += 'No stats for (or does not exist) ';
+			break;
+			case 410: msg += 'Invalid URL used for ';
+			break;
+			case 429: msg += 'Too many request being made/second; failed to get ';
+			break;
+			default: msg += 'unexpected server error for: ';
+			break;
+		}
+		error(msg + encodeURIComponent(name));
+		console.log(xhr);
+		return false;
+	});
+	return false;
+}
+
+function sortRosterByRating()
+{
+	let ppr = []; // map player:rating
+	for(let i in players['#playing#']){
+		if(players['#playing#'][i] == 0) continue;
+
+		ppr.push( [i, players[i][gametype].rating] );
+	}
+	// sort the players by rating, descending
+	ppr.sort(function(e1,e2){
+		return e2[1] - e1[1];
+	});
+
+	return ppr.map(x=>x[0]);
+}
+
+function makePlayerTable()
+{
+	let ratingorder = sortRosterByRating();
+	let str = '';
+	// match players taking into account team preferences
+	while( ratingorder.length ){
+		let p1 = ratingorder.shift();
+		let tteam = players['#playing#'][p1];
+		let p2 = '';
+		if( ratingorder.length ){
+			if(tteam == DEFAULT_TEAM_ANY){
+				p2 = ratingorder.shift();
+			}
+			else{
+				for(let i=0; i<ratingorder.length; ++i){
+					if( players['#playing#'][ratingorder[i]] != tteam ){
+						p2 = ratingorder.splice(i, 1);
+						break;
+					}
+				}
+			}
+		}
+
+		// swap players depending on team preference
+		if( tteam == 2 || players['#playing#'][p2] == 1 ){
+			let tmp = p1;
+			p1 = p2;
+			p2 = tmp;
+		}
+		str += makePlayerTr(players[p1], players[p2]);
+	}
+
+	$('#teams tbody').html(str);
+}
+
+function makePlayerTr(pA, pB)
+{
+	return `<tr class='player-board'><td><b>${pA['#name']}</b> ${pA[gametype].rating}</td>
+		<td>${pB[gametype].rating} <b>${pB['#name']}</b></td>
+		<td><input name='notes[${pA['#name']}][${pB['#name']}]'></td><td class='wld'>\n`+
+		(pA['#name']!='' && pB['#name']!=''?
+		`<label>W<input type='radio' name='res[${pA['#name']}][${pB['#name']}]' value='w'></label>
+		<label>L<input type='radio' name='res[${pA['#name']}][${pB['#name']}]' value='l'></label>
+		<label>D<input type='radio' name='res[${pA['#name']}][${pB['#name']}]' value='d'></label>
+		<button onclick='clearRes(this)' title='reset result'> x </button>`:'')
+	+`\n</td></tr>\n`;
+}
+
+function clearRes(el)
+{
+	$(el).parent().find('input[type=radio]').prop('checked',false).
+		first().trigger("change",{'clear':1});
+}
+
+function notice(msg, clear)
+{
+	$('#script-notice').show().html(msg);
+	window.clearTimeout(timer);
+	if(clear!=false)
+		timer = window.setTimeout(clearmsgs, 3000);
+}
+
+function error(msg, clear)
+{
+	$('#script-error').show().html(msg);
+	window.clearTimeout(timer);
+	if(clear!=false)
+		timer = window.setTimeout(clearmsgs, 3000);
+}
+
+function clearmsgs()
+{
+	$('#script-error').html('').slideUp(2000);
+	$('#script-notice').html('').slideUp(2000);
+}
+
+</script>
+</body>
+</html>
