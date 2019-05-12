@@ -217,6 +217,10 @@ function addPlayer()
 				let g = gametypes[i];
 				if( !d[g] ){
 					console.log(n+' has not played any '+g);
+					players[n][g] = {
+						"rating": '',
+						"played": 0
+					};
 					continue;
 				}
 				let cg = Number(d[g].record.win)+Number(d[g].record.loss)+Number(d[g].record.draw);
